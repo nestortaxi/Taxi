@@ -175,7 +175,7 @@ $("send").addEventListener("click", function(){
     ($("name").value.trim()?"\nNombre: "+$("name").value.trim():"");
   var a=document.createElement("a");a.href="https://wa.me/"+WA+"?text="+encodeURIComponent(msg);a.target="_blank";a.rel="noopener";document.body.appendChild(a);a.click();a.remove();
 });
-var C = {f:null,t:null}, geoUsed = false, BB = {}, MISS = [];
+var C = {f:null,t:null}, geoUsed = false, BB = {}, MISS = [], OVPDOWN = false, NOMQ = {}, lastNom = 0;
 var HAB = [22.88,-82.58,23.24,-82.05], CIUDAD = "La Habana"; // la búsqueda nunca sale de La Habana
 var OVP = ["https://overpass-api.de/api/interpreter","https://overpass.kumi.systems/api/interpreter"];
 function tf(u,o,ms){
@@ -190,38 +190,100 @@ function rx(t){
   return t.replace(/[a-z]/g,function(c){return c=="h" ? "h?" : "["+(m[c]||c)+"]+"});
 }
 function inHab(lat,lon){return lat>=HAB[0]&&lat<=HAB[2]&&lon>=HAB[1]&&lon<=HAB[3]}
+function nomGate(){
+  var w = Math.max(0, lastNom+1100-Date.now()); lastNom = Date.now()+w;
+  return new Promise(function(r){setTimeout(r,w)});
+}
 function bbox(q){
   if(BB[q]) return Promise.resolve(BB[q]);
-  return tf("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=cu&q="+encodeURIComponent(q+", "+CIUDAD),{},10000)
-  .then(function(r){return r.json()}).then(function(a){
+  return nomGate().then(function(){
+    return tf("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=cu&q="+encodeURIComponent(q+", "+CIUDAD),{},10000);
+  }).then(function(r){return r.json()}).then(function(a){
     var p = a.filter(function(x){return /habana|havana/i.test(x.display_name) && inHab(+x.lat,+x.lon)})[0];
     if(!p) throw 0;
     var b = p.boundingbox, s = Math.max(+b[0],HAB[0]), w = Math.max(+b[2],HAB[1]), n = Math.min(+b[1],HAB[2]), e = Math.min(+b[3],HAB[3]);
     BB[q] = (s<n && w<e) ? [s,w,n,e] : HAB; return BB[q];
   });
 }
+/* --- Vía 1: Overpass (calles exactas) --- */
 function ovp(q){
-  var i = 0;
-  function go(){
-    return tf(OVP[i],{method:"POST",body:"data="+encodeURIComponent(q)},15000)
-    .then(function(r){if(!r.ok) throw 0; return r.json()})
-    .catch(function(e){ if(++i<OVP.length) return go(); throw "NET" });
-  }
-  return go();
+  var ps = OVP.map(function(u){
+    return tf(u,{method:"POST",body:"data="+encodeURIComponent(q)},8000).then(function(r){if(!r.ok) throw 0; return r.json()});
+  });
+  return Promise.any(ps).catch(function(){ throw "NET" });
+}
+/* --- Vía 2: Nominatim con la forma de cada calle --- */
+function nomStreet(name,bb){
+  var k = name.toLowerCase()+"|"+bb.join(",");
+  if(NOMQ[k]) return NOMQ[k];
+  var vb = [bb[1],bb[2],bb[3],bb[0]].join(",");
+  var re = new RegExp("(^| )"+rx(name)+"($| )","i");
+  var q = name.trim().replace(/^(calle|avenida|ave\.?|av\.?|calzada|calz\.?)\s+/i,"");
+  if(/^\d+\w?$/.test(q) || q.length==1) q = "Calle "+q;
+  NOMQ[k] = nomGate().then(function(){
+    return tf("https://nominatim.openstreetmap.org/search?format=jsonv2&polygon_geojson=1&limit=15&bounded=1&viewbox="+vb+"&countrycodes=cu&q="+encodeURIComponent(q),{},12000);
+  }).then(function(r){return r.json()}).then(function(a){
+    var out = [];
+    a.forEach(function(x){
+      if(x.category!="highway" || !x.geojson || !re.test(x.name||"")) return;
+      if(x.geojson.type=="LineString") out.push(x.geojson.coordinates);
+      else if(x.geojson.type=="MultiLineString") x.geojson.coordinates.forEach(function(l){out.push(l)});
+    });
+    return out;
+  }).catch(function(){ delete NOMQ[k]; throw "NET" });
+  return NOMQ[k];
+}
+function segInt(p1,p2,p3,p4){
+  var d = (p2[0]-p1[0])*(p4[1]-p3[1])-(p2[1]-p1[1])*(p4[0]-p3[0]); if(!d) return null;
+  var t = ((p3[0]-p1[0])*(p4[1]-p3[1])-(p3[1]-p1[1])*(p4[0]-p3[0]))/d;
+  var u = ((p3[0]-p1[0])*(p2[1]-p1[1])-(p3[1]-p1[1])*(p2[0]-p1[0]))/d;
+  return (t>=0&&t<=1&&u>=0&&u<=1) ? [p1[0]+t*(p2[0]-p1[0]), p1[1]+t*(p2[1]-p1[1])] : null;
+}
+function dist(a,b){return Math.pow(a[0]-b[0],2)+Math.pow(a[1]-b[1],2)}
+function meet(A,B,near){
+  var best = null, bd = 1e9;
+  A.forEach(function(la){B.forEach(function(lb){
+    for(var i=0;i<la.length-1;i++) for(var j=0;j<lb.length-1;j++){
+      var p = segInt(la[i],la[i+1],lb[j],lb[j+1]);
+      if(p){var d=dist(p,near); if(d<bd){bd=d;best=p}}
+    }
+  })});
+  if(best) return best;
+  var md = 1e9, mp = null;
+  function near2(P,Q){P.forEach(function(la){la.forEach(function(a){Q.forEach(function(lb){
+    for(var j=0;j<lb.length-1;j++){
+      var u=lb[j], v=lb[j+1], dx=v[0]-u[0], dy=v[1]-u[1], L=dx*dx+dy*dy;
+      var t = L ? Math.max(0,Math.min(1,((a[0]-u[0])*dx+(a[1]-u[1])*dy)/L)) : 0;
+      var q = [u[0]+t*dx, u[1]+t*dy], d = dist(a,q);
+      if(d<md){md=d;mp=[(a[0]+q[0])/2,(a[1]+q[1])/2]}
+    }
+  })})})}
+  near2(A,B); near2(B,A);
+  return md < 6.4e-7 ? mp : null; /* unos 80 m */
+}
+function crossNom(a,b,bb){
+  return Promise.all([nomStreet(a,bb),nomStreet(b,bb)]).then(function(r){
+    if(!r[0].length || !r[1].length) return null;
+    return meet(r[0],r[1],[(bb[1]+bb[3])/2,(bb[0]+bb[2])/2]);
+  });
 }
 function cross(a,b,bb){
+  if(OVPDOWN) return crossNom(a,b,bb);
   var box = "("+bb.join(",")+")";
   var q = '[out:json][timeout:20];way["highway"]["name"~"(^| )'+rx(a)+'($| )",i]'+box+'->.a;way["highway"]["name"~"(^| )'+rx(b)+'($| )",i]'+box+'->.b;node(w.a)(w.b);out;';
   return ovp(q).then(function(j){
     var cy = (bb[0]+bb[2])/2, cx = (bb[1]+bb[3])/2, best = null, bd = 1e9;
     j.elements.forEach(function(n){var d=Math.pow(n.lat-cy,2)+Math.pow(n.lon-cx,2); if(d<bd){bd=d;best=n}});
     return best ? [best.lon,best.lat] : null;
+  }).catch(function(e){
+    if(e==="NET"){ OVPDOWN = true; return crossNom(a,b,bb); }
+    throw e;
   });
 }
 async function locate(p){
   var m = $(p+"m").value.trim(), c = $(p+"c").value.trim(), e = $(p+"e").value.trim(), y = $(p+"y").value.trim();
   if(!c || (!e && !y)) return null;
-  $("rt").textContent = "Buscando "+(p=="f"?"la recogida":"el destino")+"…";
+  $("rt").textContent = "Buscando "+(p=="f"?"la recogida":"el destino")+"… (puede tardar unos segundos)";
   var bb = HAB;
   if(m){ try{ bb = await bbox(m) }catch(x){ bb = HAB } }
   var pts = [];
