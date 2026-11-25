@@ -175,19 +175,24 @@ $("send").addEventListener("click", function(){
     ($("name").value.trim()?"\nNombre: "+$("name").value.trim():"");
   var a=document.createElement("a");a.href="https://wa.me/"+WA+"?text="+encodeURIComponent(msg);a.target="_blank";a.rel="noopener";document.body.appendChild(a);a.click();a.remove();
 });
-var C = {f:null,t:null}, geoUsed = false, BB = {};
+var C = {f:null,t:null}, geoUsed = false, BB = {}, MISS = [];
 var HAB = [22.88,-82.58,23.24,-82.05], CIUDAD = "La Habana"; // la búsqueda nunca sale de La Habana
 var OVP = ["https://overpass-api.de/api/interpreter","https://overpass.kumi.systems/api/interpreter"];
+function tf(u,o,ms){
+  var c = new AbortController(), t = setTimeout(function(){c.abort()}, ms);
+  o = o || {}; o.signal = c.signal;
+  return fetch(u,o).finally(function(){clearTimeout(t)});
+}
 function rx(t){
   t = t.trim().replace(/^(calle|avenida|ave\.?|av\.?|calzada|calz\.?)\s+/i,"").replace(/[.*+?^$()|\\[\]{}"]/g,"");
-  t = t.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
-  var m = {a:"aáàä",e:"eéèë",i:"iíìï",o:"oóòö",u:"uúùü",n:"nñ"};
-  return t.replace(/[aeioun]/g,function(c){return "["+m[c]+"]"});
+  t = t.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/([a-z])\1+/g,"$1");
+  var m = {a:"aáàä",e:"eéèë",i:"iíìï",o:"oóòö",u:"uúùü",n:"nñ",b:"bv",v:"bv",s:"sz",z:"sz",k:"kc",c:"ck",y:"yi"};
+  return t.replace(/[a-z]/g,function(c){return c=="h" ? "h?" : "["+(m[c]||c)+"]+"});
 }
 function inHab(lat,lon){return lat>=HAB[0]&&lat<=HAB[2]&&lon>=HAB[1]&&lon<=HAB[3]}
 function bbox(q){
   if(BB[q]) return Promise.resolve(BB[q]);
-  return fetch("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=cu&q="+encodeURIComponent(q+", "+CIUDAD))
+  return tf("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=cu&q="+encodeURIComponent(q+", "+CIUDAD),{},10000)
   .then(function(r){return r.json()}).then(function(a){
     var p = a.filter(function(x){return /habana|havana/i.test(x.display_name) && inHab(+x.lat,+x.lon)})[0];
     if(!p) throw 0;
@@ -198,9 +203,9 @@ function bbox(q){
 function ovp(q){
   var i = 0;
   function go(){
-    return fetch(OVP[i],{method:"POST",body:"data="+encodeURIComponent(q)})
+    return tf(OVP[i],{method:"POST",body:"data="+encodeURIComponent(q)},15000)
     .then(function(r){if(!r.ok) throw 0; return r.json()})
-    .catch(function(e){ if(++i<OVP.length) return go(); throw e });
+    .catch(function(e){ if(++i<OVP.length) return go(); throw "NET" });
   }
   return go();
 }
@@ -216,11 +221,12 @@ function cross(a,b,bb){
 async function locate(p){
   var m = $(p+"m").value.trim(), c = $(p+"c").value.trim(), e = $(p+"e").value.trim(), y = $(p+"y").value.trim();
   if(!c || (!e && !y)) return null;
+  $("rt").textContent = "Buscando "+(p=="f"?"la recogida":"el destino")+"…";
   var bb = HAB;
   if(m){ try{ bb = await bbox(m) }catch(x){ bb = HAB } }
   var pts = [];
-  if(e){ var r1 = await cross(c,e,bb); if(r1) pts.push(r1) }
-  if(y){ var r2 = await cross(c,y,bb); if(r2) pts.push(r2) }
+  if(e){ var r1 = await cross(c,e,bb); if(r1) pts.push(r1); else MISS.push(c+" con "+e) }
+  if(y){ var r2 = await cross(c,y,bb); if(r2) pts.push(r2); else MISS.push(c+" con "+y) }
   if(!pts.length) return null;
   return [pts.reduce(function(s,p){return s+p[0]},0)/pts.length, pts.reduce(function(s,p){return s+p[1]},0)/pts.length];
 }
@@ -231,8 +237,8 @@ function addr(p){
   return c + (e&&y ? " entre "+e+" y "+y : (e||y ? " esquina "+(e||y) : "")) + (m ? ", "+m : "");
 }
 function route(){
-  $("rt").textContent = "Calculando ruta…";
-  return fetch("https://router.project-osrm.org/route/v1/driving/"+C.f.join(",")+";"+C.t.join(",")+"?overview=false")
+  $("rt").textContent = "Calculando la ruta…";
+  return tf("https://router.project-osrm.org/route/v1/driving/"+C.f.join(",")+";"+C.t.join(",")+"?overview=false",{},12000)
   .then(function(r){return r.json()}).then(function(j){
     $("km").value = Math.round(j.routes[0].distance/100)/10;
     $("rt").textContent = "Distancia por la ruta: "+$("km").value+" km";
@@ -242,13 +248,15 @@ function route(){
 ["fm","fc","fe","fy"].forEach(function(id){$(id).addEventListener("input",function(){geoUsed=false;C.f=null})});
 ["tm","tc","te","ty"].forEach(function(id){$(id).addEventListener("input",function(){C.t=null})});
 $("go").addEventListener("click", async function(){
+  MISS = []; var net = false;
   $("rt").textContent = "Buscando las direcciones…";
   try{
     if(!geoUsed) C.f = await locate("f");
     C.t = await locate("t");
-  }catch(x){}
+  }catch(x){ net = (x==="NET") }
+  if(net){ $("rt").textContent = "No pude conectar con el servicio de mapas. Intenta de nuevo en un momento o envía igual y te confirmo el precio."; return }
   if(!C.f || !C.t){
-    $("rt").textContent = "No pude ubicar "+(!C.f&&!C.t?"la recogida ni el destino":(!C.f?"la recogida":"el destino"))+". Revisa los nombres de las calles (deben ser los de las esquinas), o envía igual y te confirmo el precio.";
+    $("rt").textContent = "No pude ubicar "+(!C.f&&!C.t?"la recogida ni el destino":(!C.f?"la recogida":"el destino"))+". "+(MISS.length?"No encontré el cruce de: "+MISS.join("; ")+". ":"")+"Revisa el nombre de las calles o envía igual y te confirmo el precio.";
     return;
   }
   route();
