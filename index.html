@@ -47,6 +47,8 @@ button:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
 .gal img{flex:0 0 auto;height:11rem;width:auto;max-width:100%;border-radius:.9rem;scroll-snap-align:center;background:var(--surface)}
 .chips{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.6rem}
 .chips span{background:var(--surface);border:1.5px solid var(--line);border-radius:2rem;padding:.3rem .7rem;font-size:.82rem;font-weight:600}
+.alt{background:var(--deep);color:var(--on-deep);margin:.2rem 0 .3rem}
+.loc legend{font-size:1rem}
 </style>
 </head>
 <body>
@@ -82,10 +84,20 @@ button:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
   <div class="seg" id="seg"></div>
 </fieldset>
 
-<div class="field"><label for="from">Recogida</label><input id="from" list="dlf" placeholder="Escribe la dirección y elige una opción" autocomplete="off"><datalist id="dlf"></datalist>
-<p class="hint"><a href="#" id="geo">Usar mi ubicación actual</a></p></div>
-<div class="field"><label for="to">Destino</label><input id="to" list="dlt" placeholder="A dónde vas" autocomplete="off"><datalist id="dlt"></datalist></div>
-<p class="hint" id="rt">Elige recogida y destino de la lista para calcular los km solos.</p>
+<fieldset class="loc"><legend>Recogida</legend>
+<div class="field"><label for="fm">Municipio o reparto</label><input id="fm" list="dlm" placeholder="Ej: Vedado, Playa, Marianao" autocomplete="off"></div>
+<div class="field"><label for="fc">Calle (sin número)</label><input id="fc" placeholder="Ej: Línea" autocomplete="off"></div>
+<div class="row"><div class="field"><label for="fe">Entre</label><input id="fe" placeholder="Calle 1" autocomplete="off"></div>
+<div class="field"><label for="fy">Y</label><input id="fy" placeholder="Calle 2" autocomplete="off"></div></div>
+<p class="hint"><a href="#" id="geo">Usar mi ubicación actual</a></p></fieldset>
+<fieldset class="loc"><legend>Destino</legend>
+<div class="field"><label for="tm">Municipio o reparto</label><input id="tm" list="dlm" placeholder="Ej: Vedado, Playa, Marianao" autocomplete="off"></div>
+<div class="field"><label for="tc">Calle (sin número)</label><input id="tc" placeholder="Ej: Línea" autocomplete="off"></div>
+<div class="row"><div class="field"><label for="te">Entre</label><input id="te" placeholder="Calle 1" autocomplete="off"></div>
+<div class="field"><label for="ty">Y</label><input id="ty" placeholder="Calle 2" autocomplete="off"></div></div></fieldset>
+<datalist id="dlm"><option>Playa</option><option>Plaza de la Revolución</option><option>Vedado</option><option>Miramar</option><option>Nuevo Vedado</option><option>Centro Habana</option><option>La Habana Vieja</option><option>Regla</option><option>La Habana del Este</option><option>Guanabacoa</option><option>San Miguel del Padrón</option><option>Diez de Octubre</option><option>Cerro</option><option>Marianao</option><option>La Lisa</option><option>Boyeros</option><option>Arroyo Naranjo</option><option>Cotorro</option></datalist>
+<button type="button" id="go" class="alt">Calcular km y precio</button>
+<p class="hint" id="rt">Llena municipio, calle y entrecalles de cada punto, y toca Calcular.</p>
 <div class="row">
   <div class="field"><label for="km">Distancia (km)</label><input id="km" type="number" inputmode="decimal" min="0" step="0.1" placeholder="0"></div>
   <div class="field"><label for="min">Espera o paradas (min)</label><input id="min" type="number" inputmode="numeric" min="0" step="1" placeholder="0"></div>
@@ -138,7 +150,7 @@ function surch(){
 }
 function calc(){
   var r = RATES[cat], km = parseFloat($("km").value)||0, mi = parseFloat($("min").value)||0;
-  if(!km){ $("total").textContent = fmt(r.min); $("detail").textContent = "Precio mínimo hasta 2,9 km · indica los km de tu ruta"; return null }
+  if(!km){ $("total").textContent = fmt(r.min); $("detail").textContent = "Precio mínimo (hasta 2,9 km). Si tu ruta es más larga, te confirmo el precio por WhatsApp."; return null }
   var base = km>=MINKM ? km*r.km : r.min, s = surch();
   var total = Math.ceil((base*(1+s.p)+mi*WAIT)/50)*50;
   $("total").textContent = fmt(total);
@@ -149,53 +161,104 @@ seg.addEventListener("change", function(e){cat=e.target.value;calc()});
 ["km","min","pax","cargo","when"].forEach(function(id){$(id).addEventListener("input",calc);$(id).addEventListener("change",calc)});
 $("send").addEventListener("click", function(){
   var t = calc(), r = RATES[cat];
-  if(!$("from").value.trim()||!$("to").value.trim()){alert("Escribe la recogida y el destino.");return}
-  if(!t){alert("Indica la distancia en km para calcular el precio.");return}
+  if(!addr("f")||!addr("t")){alert("Escribe al menos la calle de recogida y la de destino.");return}
+  
   var w = $("when").value ? $("when").value.replace("T"," a las ") : "lo antes posible";
   var msg = "Hola, quiero reservar un taxi.\n"+
     "Servicio: "+r.label+"\n"+
-    "Recogida: "+($("from").value=="Mi ubicación actual"&&C.from?"https://maps.google.com/?q="+C.from[1]+","+C.from[0]:$("from").value.trim())+"\n"+
-    "Destino: "+$("to").value.trim()+"\n"+
+    "Recogida: "+addr("f")+"\n"+
+    "Destino: "+addr("t")+"\n"+
     "Cuándo: "+w+"\n"+
     "Pasajeros: "+$("pax").value+($("cargo").value=="1"?" · con carga":"")+"\n"+
-    "Distancia: "+$("km").value+" km"+($("min").value&&$("min").value!="0"?" · espera "+$("min").value+" min":"")+"\n"+
-    "Precio estimado: $"+fmt(t)+
+    (t?"Distancia: "+$("km").value+" km":"Distancia: por confirmar")+($("min").value&&$("min").value!="0"?" · espera "+$("min").value+" min":"")+"\n"+
+    (t?"Precio estimado: $"+fmt(t):"Precio: por confirmar")+
     ($("name").value.trim()?"\nNombre: "+$("name").value.trim():"");
   var a=document.createElement("a");a.href="https://wa.me/"+WA+"?text="+encodeURIComponent(msg);a.target="_blank";a.rel="noopener";document.body.appendChild(a);a.click();a.remove();
 });
-var C = {from:null,to:null}, T = {};
-function sug(id, dl){
-  var el = $(id);
-  el.addEventListener("input", function(){
-    var d = $(dl), m = d._m;
-    if(m && m[el.value]){C[id]=m[el.value];route();return}
-    C[id] = null; clearTimeout(T[id]);
-    var q = el.value.trim(); if(q.length<3) return;
-    T[id] = setTimeout(function(){
-      fetch("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=cu&viewbox=-82.6,23.3,-82.0,22.9&q="+encodeURIComponent(q))
-      .then(function(r){return r.json()}).then(function(a){
-        d.innerHTML = ""; d._m = {};
-        a.forEach(function(p){var o=document.createElement("option");o.value=p.display_name;d.appendChild(o);d._m[p.display_name]=[p.lon,p.lat]});
-      }).catch(function(){});
-    }, 700);
+var C = {f:null,t:null}, geoUsed = false, BB = {};
+var HAB = [22.88,-82.58,23.24,-82.05], CIUDAD = "La Habana"; // la búsqueda nunca sale de La Habana
+var OVP = ["https://overpass-api.de/api/interpreter","https://overpass.kumi.systems/api/interpreter"];
+function rx(t){
+  t = t.trim().replace(/^(calle|avenida|ave\.?|av\.?|calzada|calz\.?)\s+/i,"").replace(/[.*+?^$()|\\[\]{}"]/g,"");
+  t = t.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+  var m = {a:"aáàä",e:"eéèë",i:"iíìï",o:"oóòö",u:"uúùü",n:"nñ"};
+  return t.replace(/[aeioun]/g,function(c){return "["+m[c]+"]"});
+}
+function inHab(lat,lon){return lat>=HAB[0]&&lat<=HAB[2]&&lon>=HAB[1]&&lon<=HAB[3]}
+function bbox(q){
+  if(BB[q]) return Promise.resolve(BB[q]);
+  return fetch("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=cu&q="+encodeURIComponent(q+", "+CIUDAD))
+  .then(function(r){return r.json()}).then(function(a){
+    var p = a.filter(function(x){return /habana|havana/i.test(x.display_name) && inHab(+x.lat,+x.lon)})[0];
+    if(!p) throw 0;
+    var b = p.boundingbox, s = Math.max(+b[0],HAB[0]), w = Math.max(+b[2],HAB[1]), n = Math.min(+b[1],HAB[2]), e = Math.min(+b[3],HAB[3]);
+    BB[q] = (s<n && w<e) ? [s,w,n,e] : HAB; return BB[q];
   });
 }
-sug("from","dlf"); sug("to","dlt");
+function ovp(q){
+  var i = 0;
+  function go(){
+    return fetch(OVP[i],{method:"POST",body:"data="+encodeURIComponent(q)})
+    .then(function(r){if(!r.ok) throw 0; return r.json()})
+    .catch(function(e){ if(++i<OVP.length) return go(); throw e });
+  }
+  return go();
+}
+function cross(a,b,bb){
+  var box = "("+bb.join(",")+")";
+  var q = '[out:json][timeout:20];way["highway"]["name"~"(^| )'+rx(a)+'($| )",i]'+box+'->.a;way["highway"]["name"~"(^| )'+rx(b)+'($| )",i]'+box+'->.b;node(w.a)(w.b);out;';
+  return ovp(q).then(function(j){
+    var cy = (bb[0]+bb[2])/2, cx = (bb[1]+bb[3])/2, best = null, bd = 1e9;
+    j.elements.forEach(function(n){var d=Math.pow(n.lat-cy,2)+Math.pow(n.lon-cx,2); if(d<bd){bd=d;best=n}});
+    return best ? [best.lon,best.lat] : null;
+  });
+}
+async function locate(p){
+  var m = $(p+"m").value.trim(), c = $(p+"c").value.trim(), e = $(p+"e").value.trim(), y = $(p+"y").value.trim();
+  if(!c || (!e && !y)) return null;
+  var bb = HAB;
+  if(m){ try{ bb = await bbox(m) }catch(x){ bb = HAB } }
+  var pts = [];
+  if(e){ var r1 = await cross(c,e,bb); if(r1) pts.push(r1) }
+  if(y){ var r2 = await cross(c,y,bb); if(r2) pts.push(r2) }
+  if(!pts.length) return null;
+  return [pts.reduce(function(s,p){return s+p[0]},0)/pts.length, pts.reduce(function(s,p){return s+p[1]},0)/pts.length];
+}
+function addr(p){
+  if(p=="f" && geoUsed && C.f) return "https://maps.google.com/?q="+C.f[1]+","+C.f[0];
+  var c = $(p+"c").value.trim(); if(!c) return "";
+  var e = $(p+"e").value.trim(), y = $(p+"y").value.trim(), m = $(p+"m").value.trim();
+  return c + (e&&y ? " entre "+e+" y "+y : (e||y ? " esquina "+(e||y) : "")) + (m ? ", "+m : "");
+}
 function route(){
-  if(!C.from||!C.to) return;
   $("rt").textContent = "Calculando ruta…";
-  fetch("https://router.project-osrm.org/route/v1/driving/"+C.from.join(",")+";"+C.to.join(",")+"?overview=false")
+  return fetch("https://router.project-osrm.org/route/v1/driving/"+C.f.join(",")+";"+C.t.join(",")+"?overview=false")
   .then(function(r){return r.json()}).then(function(j){
     $("km").value = Math.round(j.routes[0].distance/100)/10;
     $("rt").textContent = "Distancia por la ruta: "+$("km").value+" km";
     calc();
-  }).catch(function(){$("rt").textContent = "No se pudo calcular la ruta. Escribe los km a mano."});
+  }).catch(function(){$("rt").textContent = "No se pudo calcular la ruta. Escribe los km a mano o envía igual y te confirmo el precio."});
 }
+["fm","fc","fe","fy"].forEach(function(id){$(id).addEventListener("input",function(){geoUsed=false;C.f=null})});
+["tm","tc","te","ty"].forEach(function(id){$(id).addEventListener("input",function(){C.t=null})});
+$("go").addEventListener("click", async function(){
+  $("rt").textContent = "Buscando las direcciones…";
+  try{
+    if(!geoUsed) C.f = await locate("f");
+    C.t = await locate("t");
+  }catch(x){}
+  if(!C.f || !C.t){
+    $("rt").textContent = "No pude ubicar "+(!C.f&&!C.t?"la recogida ni el destino":(!C.f?"la recogida":"el destino"))+". Revisa los nombres de las calles (deben ser los de las esquinas), o envía igual y te confirmo el precio.";
+    return;
+  }
+  route();
+});
 $("geo").addEventListener("click", function(e){
   e.preventDefault();
-  if(!navigator.geolocation){return}
+  if(!navigator.geolocation) return;
   navigator.geolocation.getCurrentPosition(function(p){
-    C.from = [p.coords.longitude, p.coords.latitude]; $("from").value = "Mi ubicación actual"; route();
+    C.f = [p.coords.longitude, p.coords.latitude]; geoUsed = true;
+    $("rt").textContent = "Recogida: tu ubicación actual. Ahora completa el destino y toca Calcular.";
   }, function(){$("rt").textContent = "No se pudo obtener tu ubicación."});
 });
 calc();
