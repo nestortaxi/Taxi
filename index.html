@@ -49,6 +49,7 @@ button:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
 .chips span{background:var(--surface);border:1.5px solid var(--line);border-radius:2rem;padding:.3rem .7rem;font-size:.82rem;font-weight:600}
 .alt{background:var(--deep);color:var(--on-deep);margin:.2rem 0 .3rem}
 .loc legend{font-size:1rem}
+.field input:disabled{opacity:.5}
 </style>
 </head>
 <body>
@@ -84,12 +85,14 @@ button:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
   <div class="seg" id="seg"></div>
 </fieldset>
 
+<fieldset><legend>Modalidad</legend><div class="seg"><input type="radio" name="mode" id="m-pp" value="pp" checked><label for="m-pp">Punto a punto<small>de A a B</small></label><input type="radio" name="mode" id="m-rec" value="rec"><label for="m-rec">Recorrido<small>con paradas</small></label></div></fieldset>
 <fieldset class="loc"><legend>Recogida</legend>
 <div class="field"><label for="fm">Municipio o reparto</label><input id="fm" list="dlm" placeholder="Ej: Vedado, Playa, Marianao" autocomplete="off"></div>
 <div class="field"><label for="fc">Calle (sin número)</label><input id="fc" placeholder="Ej: Línea" autocomplete="off"></div>
 <div class="row"><div class="field"><label for="fe">Entre</label><input id="fe" placeholder="Calle 1" autocomplete="off"></div>
 <div class="field"><label for="fy">Y</label><input id="fy" placeholder="Calle 2" autocomplete="off"></div></div>
 <p class="hint"><a href="#" id="geo">Usar mi ubicación actual</a></p></fieldset>
+<div id="stopsbox" hidden><div id="stops"></div><button type="button" id="addstop" class="alt">+ Adicionar parada</button></div>
 <fieldset class="loc"><legend>Destino</legend>
 <div class="field"><label for="tm">Municipio o reparto</label><input id="tm" list="dlm" placeholder="Ej: Vedado, Playa, Marianao" autocomplete="off"></div>
 <div class="field"><label for="tc">Calle (sin número)</label><input id="tc" placeholder="Ej: Línea" autocomplete="off"></div>
@@ -165,17 +168,17 @@ $("send").addEventListener("click", function(){
   
   var w = $("when").value ? $("when").value.replace("T"," a las ") : "lo antes posible";
   var msg = "Hola, quiero reservar un taxi.\n"+
-    "Servicio: "+r.label+"\n"+
-    "Recogida: "+addr("f")+"\n"+
+    "Servicio: "+r.label+" · "+(mode()=="rec"?"Recorrido":"Punto a punto")+"\n"+
+    "Recogida: "+addr("f")+"\n"+actStops().map(function(p,i){return "Parada "+(i+1)+": "+addr(p)+"\n"}).join("")+
     "Destino: "+addr("t")+"\n"+
     "Cuándo: "+w+"\n"+
     "Pasajeros: "+$("pax").value+($("cargo").value=="1"?" · con carga":"")+"\n"+
     (t?"Distancia: "+$("km").value+" km":"Distancia: por confirmar")+($("min").value&&$("min").value!="0"?" · espera "+$("min").value+" min":"")+"\n"+
-    (t?"Precio estimado: $"+fmt(t):"Precio: por confirmar")+
+    (t?"Precio estimado: $"+fmt(t)+(approx?" (km aproximados)":""):"Precio: por confirmar")+
     ($("name").value.trim()?"\nNombre: "+$("name").value.trim():"");
   var a=document.createElement("a");a.href="https://wa.me/"+WA+"?text="+encodeURIComponent(msg);a.target="_blank";a.rel="noopener";document.body.appendChild(a);a.click();a.remove();
 });
-var C = {f:null,t:null}, geoUsed = false, BB = {}, MISS = [], DIAG = [], OVPDOWN = false, NOMQ = {}, lastNom = 0;
+var C = {f:null,t:null}, geoUsed = false, BB = {}, MISS = [], DIAG = [], STOPS = [], stopN = 0, approx = false, OVPDOWN = false, NOMQ = {}, lastNom = 0;
 var HAB = [22.88,-82.58,23.24,-82.05], CIUDAD = "La Habana"; // la búsqueda nunca sale de La Habana
 var OVP = ["https://overpass-api.de/api/interpreter","https://overpass.kumi.systems/api/interpreter","https://overpass.private.coffee/api/interpreter","https://maps.mail.ru/osm/tools/overpass/api/interpreter","https://overpass.openstreetmap.fr/api/interpreter"];
 function tf(u,o,ms){
@@ -283,13 +286,16 @@ function cross(a,b,bb){
 async function locate(p){
   var m = $(p+"m").value.trim(), c = $(p+"c").value.trim(), e = $(p+"e").value.trim(), y = $(p+"y").value.trim();
   if(!c || (!e && !y)) return null;
-  $("rt").textContent = "Buscando "+(p=="f"?"la recogida":"el destino")+"… (puede tardar unos segundos)";
+  $("rt").textContent = "Buscando "+label(p)+"… (puede tardar unos segundos)";
   var bb = HAB;
   if(m){ try{ bb = await bbox(m) }catch(x){ bb = HAB } }
   var pts = [];
   if(e){ var r1 = await cross(c,e,bb); if(r1) pts.push(r1); else MISS.push(c+" con "+e) }
   if(y){ var r2 = await cross(c,y,bb); if(r2) pts.push(r2); else MISS.push(c+" con "+y) }
-  if(!pts.length) return null;
+  if(!pts.length){
+    if(m && bb!==HAB && bb[2]-bb[0]<0.03 && bb[3]-bb[1]<0.03){ approx = true; return [(bb[1]+bb[3])/2,(bb[0]+bb[2])/2]; }
+    return null;
+  }
   return [pts.reduce(function(s,p){return s+p[0]},0)/pts.length, pts.reduce(function(s,p){return s+p[1]},0)/pts.length];
 }
 function addr(p){
@@ -298,38 +304,75 @@ function addr(p){
   var e = $(p+"e").value.trim(), y = $(p+"y").value.trim(), m = $(p+"m").value.trim();
   return c + (e&&y ? " entre "+e+" y "+y : (e||y ? " esquina "+(e||y) : "")) + (m ? ", "+m : "");
 }
-function route(){
+function label(p){return p=="f" ? "la recogida" : (p=="t" ? "el destino" : "la parada "+(STOPS.indexOf(p)+1))}
+function mode(){return document.querySelector('input[name="mode"]:checked').value}
+function actStops(){return mode()=="rec" ? STOPS.filter(function(p){return addr(p)}) : []}
+function route(pts){
   $("rt").textContent = "Calculando la ruta…";
-  return tf("https://router.project-osrm.org/route/v1/driving/"+C.f.join(",")+";"+C.t.join(",")+"?overview=false",{},12000)
+  return tf("https://router.project-osrm.org/route/v1/driving/"+pts.map(function(p){return p.join(",")}).join(";")+"?overview=false",{},12000)
   .then(function(r){return r.json()}).then(function(j){
     $("km").value = Math.round(j.routes[0].distance/100)/10;
-    $("rt").textContent = "Distancia por la ruta: "+$("km").value+" km";
+    var n = pts.length-2;
+    $("rt").textContent = (approx?"Distancia aproximada: ":"Distancia por la ruta: ")+$("km").value+" km"+(n?" (con "+n+" parada"+(n>1?"s":"")+")":"")+(approx?". No encontré la calle exacta; te confirmo el precio final.":"");
     calc();
   }).catch(function(){$("rt").textContent = "No se pudo calcular la ruta. Escribe los km a mano o envía igual y te confirmo el precio."});
 }
-["fm","fc","fe","fy"].forEach(function(id){$(id).addEventListener("input",function(){geoUsed=false;C.f=null})});
+function renum(){STOPS.forEach(function(p,i){$(p+"box").querySelector(".n").textContent = i+1})}
+function addStop(){
+  if(STOPS.length>=5) return;
+  var p = "s"+(++stopN); STOPS.push(p);
+  var d = document.createElement("fieldset"); d.className = "loc"; d.id = p+"box";
+  d.innerHTML = '<legend>Parada <span class="n"></span></legend>'+
+    '<div class="field"><label for="'+p+'m">Municipio o reparto</label><input id="'+p+'m" list="dlm" placeholder="Ej: Vedado, Playa, Marianao" autocomplete="off"></div>'+
+    '<div class="field"><label for="'+p+'c">Calle (sin número)</label><input id="'+p+'c" placeholder="Ej: Línea" autocomplete="off"></div>'+
+    '<div class="row"><div class="field"><label for="'+p+'e">Entre</label><input id="'+p+'e" placeholder="Calle 1" autocomplete="off"></div>'+
+    '<div class="field"><label for="'+p+'y">Y</label><input id="'+p+'y" placeholder="Calle 2" autocomplete="off"></div></div>'+
+    '<p class="hint"><a href="#">Quitar esta parada</a></p>';
+  $("stops").appendChild(d);
+  ["m","c","e","y"].forEach(function(k){$(p+k).addEventListener("input",function(){C[p]=null})});
+  d.querySelector("a").addEventListener("click",function(e){e.preventDefault(); STOPS = STOPS.filter(function(x){return x!=p}); d.remove(); C[p]=null; renum()});
+  renum();
+}
+["fm","fc","fe","fy"].forEach(function(id){$(id).addEventListener("input",function(){C.f=null})});
 ["tm","tc","te","ty"].forEach(function(id){$(id).addEventListener("input",function(){C.t=null})});
+document.querySelectorAll('input[name="mode"]').forEach(function(r){r.addEventListener("change",function(){
+  $("stopsbox").hidden = mode()!="rec";
+  if(mode()=="rec" && !STOPS.length) addStop();
+})});
+$("addstop").addEventListener("click", addStop);
 $("go").addEventListener("click", async function(){
-  MISS = []; DIAG = []; var net = false;
+  MISS = []; DIAG = []; approx = false; var net = false;
+  var list = ["f"].concat(actStops(), ["t"]);
   $("rt").textContent = "Buscando las direcciones…";
   try{
-    if(!geoUsed) C.f = await locate("f");
-    C.t = await locate("t");
+    for(var i=0;i<list.length;i++){
+      var p = list[i];
+      if(p=="f" && geoUsed) continue;
+      C[p] = await locate(p);
+    }
   }catch(x){ net = (x==="NET") }
   if(net){ $("rt").textContent = "No pude conectar con el servicio de mapas. Intenta de nuevo en un momento o envía igual y te confirmo el precio."; return }
-  if(!C.f || !C.t){
-    $("rt").textContent = "No pude ubicar "+(!C.f&&!C.t?"la recogida ni el destino":(!C.f?"la recogida":"el destino"))+". "+(MISS.length?"No encontré el cruce de: "+MISS.join("; ")+". ":"")+"Revisa el nombre de las calles o envía igual y te confirmo el precio. [diag: "+DIAG.join(", ")+"]";
+  var bad = list.filter(function(p){return !C[p]});
+  if(bad.length){
+    $("rt").textContent = "No pude ubicar "+bad.map(label).join(", ")+". "+(MISS.length?"No encontré el cruce de: "+MISS.join("; ")+". ":"")+"Revisa el nombre de las calles o envía igual y te confirmo el precio. [diag: "+DIAG.join(", ")+"]";
     return;
   }
-  route();
+  route(list.map(function(p){return C[p]}));
 });
+function setGeo(on){
+  geoUsed = on;
+  ["fm","fc","fe","fy"].forEach(function(id){$(id).disabled = on});
+  $("geo").textContent = on ? "✓ Usando tu ubicación actual · toca para quitar" : "Usar mi ubicación actual";
+}
 $("geo").addEventListener("click", function(e){
   e.preventDefault();
-  if(!navigator.geolocation) return;
+  if(geoUsed){ setGeo(false); C.f = null; $("rt").textContent = "Escribe la recogida o vuelve a usar tu ubicación."; return }
+  if(!navigator.geolocation){ $("rt").textContent = "Este teléfono no permite usar la ubicación aquí."; return }
+  $("rt").textContent = "Obteniendo tu ubicación…";
   navigator.geolocation.getCurrentPosition(function(p){
-    C.f = [p.coords.longitude, p.coords.latitude]; geoUsed = true;
-    $("rt").textContent = "Recogida: tu ubicación actual. Ahora completa el destino y toca Calcular.";
-  }, function(){$("rt").textContent = "No se pudo obtener tu ubicación."});
+    C.f = [p.coords.longitude, p.coords.latitude]; setGeo(true);
+    $("rt").textContent = "✓ Recogida: tu ubicación actual. Completa el destino y toca Calcular.";
+  }, function(){ $("rt").textContent = "No pude obtener tu ubicación. Revisa que Safari tenga permiso de ubicación, o escribe la recogida." }, {enableHighAccuracy:true, timeout:15000});
 });
 calc();
 </script>
